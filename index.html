@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Sync Test</title>
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#1f2a37">
+<style>
+  :root { --bg:#f6f5f2; --card:#fff; --ink:#1f2a37; --muted:#6b7280; --ok:#1d7a46; --bad:#b42318; --line:#e5e3dd; --accent:#2f5d8a; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#14181d; --card:#1d232a; --ink:#e8e6e1; --muted:#9aa3ad; --ok:#4cc38a; --bad:#f97066; --line:#2c343d; --accent:#7fb0e0; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:16px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+         padding: calc(16px + env(safe-area-inset-top)) 16px calc(24px + env(safe-area-inset-bottom)); }
+  main { max-width: 560px; margin: 0 auto; }
+  h1 { font-size: 1.4rem; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 20px; font-size: .9rem; }
+  section { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 16px; margin-bottom: 14px; }
+  h2 { font-size: 1rem; margin: 0 0 10px; }
+  ul.checks { list-style: none; padding: 0; margin: 0; }
+  ul.checks li { display: flex; justify-content: space-between; gap: 12px; padding: 6px 0; border-bottom: 1px solid var(--line); font-size: .92rem; }
+  ul.checks li:last-child { border-bottom: 0; }
+  .yes { color: var(--ok); font-weight: 600; } .no { color: var(--bad); font-weight: 600; }
+  button, label.btn { display: block; width: 100%; text-align: center; padding: 12px; margin: 8px 0 0; border: 0; border-radius: 10px;
+           background: var(--accent); color: #fff; font-size: 1rem; font-weight: 600; cursor: pointer; }
+  button.secondary { background: transparent; color: var(--accent); border: 1px solid var(--accent); }
+  input[type=file] { display: none; }
+  textarea { width: 100%; min-height: 70px; padding: 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); color: var(--ink); font: inherit; }
+  pre { white-space: pre-wrap; word-break: break-word; background: var(--bg); padding: 10px; border-radius: 8px; font-size: .82rem; margin: 10px 0 0; max-height: 260px; overflow: auto; }
+  .hint { color: var(--muted); font-size: .85rem; margin: 6px 0 0; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Sync Test</h1>
+  <p class="sub">Checks whether this device can save and reopen a file in your synced folder. Nothing leaves this device.</p>
+
+  <section>
+    <h2>1. What this browser supports</h2>
+    <ul class="checks" id="checks"></ul>
+  </section>
+
+  <section>
+    <h2>2. Save a test file</h2>
+    <textarea id="note" placeholder="Type anything, e.g. 'saved from iPhone'"></textarea>
+    <button id="saveBtn">Save file</button>
+    <p class="hint">When asked where to save, pick your iCloud Drive or Dropbox folder.</p>
+  </section>
+
+  <section>
+    <h2>3. Open a test file</h2>
+    <button id="openBtn">Open file</button>
+    <label class="btn" id="openFallback" style="display:none">Open file<input type="file" id="fileInput" accept=".json,application/json"></label>
+    <p class="hint">Open the file you saved on your other device to confirm it synced.</p>
+  </section>
+
+  <section>
+    <h2>4. Save again to the same file</h2>
+    <button id="resaveBtn" class="secondary">Save changes without asking where</button>
+    <p class="hint">This is what daily use needs. It only works if this browser can keep a handle to the file.</p>
+  </section>
+
+  <section>
+    <h2>Results log</h2>
+    <pre id="log"></pre>
+    <button id="copyBtn" class="secondary">Copy results</button>
+  </section>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const logLines = [];
+function log(msg) {
+  const line = new Date().toLocaleString() + " — " + msg;
+  logLines.push(line);
+  $("log").textContent = logLines.join("\n");
+}
+
+const isStandalone = window.matchMedia("(display-mode: standalone)").matches || window.navigator.standalone === true;
+const caps = {
+  "Running as installed app": isStandalone,
+  "Pick where to save (save dialog)": "showSaveFilePicker" in window,
+  "Pick a file to open (open dialog)": "showOpenFilePicker" in window,
+  "Re-save to same file without asking": "showSaveFilePicker" in window,
+  "Share sheet with files": !!(navigator.canShare && (() => { try { return navigator.canShare({ files: [new File(["x"], "t.json", { type: "application/json" })] }); } catch { return false; } })()),
+  "Private app storage (OPFS)": !!(navigator.storage && navigator.storage.getDirectory),
+  "Works offline (service worker)": "serviceWorker" in navigator,
+};
+for (const [k, v] of Object.entries(caps)) {
+  const li = document.createElement("li");
+  li.innerHTML = `<span>${k}</span><span class="${v ? "yes" : "no"}">${v ? "Yes" : "No"}</span>`;
+  $("checks").appendChild(li);
+}
+log("Device: " + navigator.userAgent);
+log("Installed app: " + (isStandalone ? "yes" : "no"));
+
+if (navigator.storage && navigator.storage.persist) {
+  navigator.storage.persist().then(p => log("Storage marked persistent: " + (p ? "yes" : "no")));
+}
+
+let fileHandle = null;
+
+function payload() {
+  return JSON.stringify({
+    app: "sync-test",
+    savedAt: new Date().toISOString(),
+    device: navigator.userAgent,
+    installed: isStandalone,
+    note: $("note").value
+  }, null, 2);
+}
+
+async function writeToHandle(handle) {
+  const w = await handle.createWritable();
+  await w.write(payload());
+  await w.close();
+}
+
+$("saveBtn").onclick = async () => {
+  const name = "sync-test.json";
+  try {
+    if ("showSaveFilePicker" in window) {
+      fileHandle = await window.showSaveFilePicker({ suggestedName: name, types: [{ description: "JSON", accept: { "application/json": [".json"] } }] });
+      await writeToHandle(fileHandle);
+      log("Saved with save dialog: " + fileHandle.name);
+      return;
+    }
+    const file = new File([payload()], name, { type: "application/json" });
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      await navigator.share({ files: [file], title: name });
+      log("Shared via share sheet (choose 'Save to Files' to pick a folder).");
+      return;
+    }
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(file);
+    a.download = name;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+    log("Saved as download (went to the default downloads location).");
+  } catch (e) {
+    log("Save failed or cancelled: " + e.name + " " + e.message);
+  }
+};
+
+function showFile(text, how) {
+  try {
+    const d = JSON.parse(text);
+    log(`Opened via ${how}. Saved at ${d.savedAt}, installed=${d.installed}, note="${d.note}". From: ${d.device}`);
+  } catch {
+    log("Opened via " + how + " but it is not a valid test file.");
+  }
+}
+
+if ("showOpenFilePicker" in window) {
+  $("openBtn").onclick = async () => {
+    try {
+      const [h] = await window.showOpenFilePicker({ types: [{ description: "JSON", accept: { "application/json": [".json"] } }] });
+      fileHandle = h;
+      showFile(await (await h.getFile()).text(), "open dialog");
+    } catch (e) { log("Open failed or cancelled: " + e.name + " " + e.message); }
+  };
+} else {
+  $("openBtn").style.display = "none";
+  $("openFallback").style.display = "block";
+  $("fileInput").onchange = async ev => {
+    const f = ev.target.files[0];
+    if (f) showFile(await f.text(), "file chooser (read-only copy)");
+    ev.target.value = "";
+  };
+}
+
+$("resaveBtn").onclick = async () => {
+  if (!fileHandle) { log("Re-save not possible: no file handle (save or open a file first, or this browser can't keep one)."); return; }
+  try { await writeToHandle(fileHandle); log("Re-saved to same file without a dialog: " + fileHandle.name); }
+  catch (e) { log("Re-save failed: " + e.name + " " + e.message); }
+};
+
+$("copyBtn").onclick = async () => {
+  try { await navigator.clipboard.writeText(logLines.join("\n")); log("Results copied."); }
+  catch { log("Copy failed; select the log text by hand."); }
+};
+
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.register("sw.js").then(() => log("Offline helper registered.")).catch(e => log("Offline helper failed: " + e.message));
+}
+</script>
+</body>
+</html>
